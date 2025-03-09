@@ -109,6 +109,7 @@ const GlobalStyle = createGlobalStyle`
     direction: rtl;
   }
 `;
+
 interface AppProps {
   title: string;
   isOfficeInitialized?: boolean;
@@ -121,6 +122,8 @@ const App: React.FC<AppProps> = ({ title, isOfficeInitialized = true }) => {
 
   // Processing states
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [processingStatus, setProcessingStatus] = useState<string>("جاري المعالجة...");
+  const [processingProgress, setProcessingProgress] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
 
   // Data and steps
@@ -145,6 +148,7 @@ const App: React.FC<AppProps> = ({ title, isOfficeInitialized = true }) => {
   useEffect(() => {
     const checkExcelFile = async () => {
       try {
+        setProcessingStatus("جاري التحقق من ملف Excel...");
         const isValid = await excelService.validateExcelFile();
         setExcelStatus({
           isValid,
@@ -169,50 +173,86 @@ const App: React.FC<AppProps> = ({ title, isOfficeInitialized = true }) => {
   }, [isOfficeInitialized]);
 
   // Handle image upload
-  const handleImageUpload = (file: File) => {
-    if (file) {
-      // Check if file is an image
-      if (!file.type.startsWith("image/")) {
-        setError("الرجاء اختيار ملف صورة صالح");
-        return;
-      }
-
-      // Check file size (max 5MB)
-      if (file.size > 5 * 1024 * 1024) {
-        setError("حجم الصورة يجب أن يكون أقل من 5 ميغابايت");
-        return;
-      }
-
-      setSelectedImage(file);
-
-      // Create preview
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        if (e.target && typeof e.target.result === "string") {
-          setImagePreview(e.target.result);
-        }
-      };
-      reader.readAsDataURL(file);
+  const handleImageUpload = (file: File | null) => {
+    if (!file) {
+      setSelectedImage(null);
+      setImagePreview(null);
       setError(null);
+      return;
     }
+
+    setSelectedImage(file);
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      if (e.target && typeof e.target.result === "string") {
+        setImagePreview(e.target.result);
+      }
+    };
+    reader.readAsDataURL(file);
+    setError(null);
   };
+
+  // Simulated progress for the processing
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+
+    if (isProcessing) {
+      let progress = 0;
+      timer = setInterval(() => {
+        progress += 1;
+
+        // Update status based on progress
+        if (progress === 30) {
+          setProcessingStatus("جاري التعرف على النص باستخدام Google Cloud Vision...");
+        } else if (progress === 60) {
+          setProcessingStatus("جاري تحليل بنية الجدول واستخراج البيانات...");
+        } else if (progress === 85) {
+          setProcessingStatus("جاري ربط البيانات المستخرجة...");
+        }
+
+        setProcessingProgress(Math.min(progress, 95)); // Cap at 95% until process completes
+
+        if (progress >= 95) {
+          clearInterval(timer);
+        }
+      }, 200);
+    } else {
+      setProcessingProgress(0);
+    }
+
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [isProcessing]);
 
   // Process image with OCR
   const processImage = async () => {
     if (!selectedImage) return;
 
     setIsProcessing(true);
+    setProcessingStatus("جاري تحليل الصورة باستخدام تقنية التعرف الضوئي على النص...");
+    setProcessingProgress(5);
     setError(null); // Clear any previous errors
 
     try {
-      // Show a cloud processing message
       // Process the image using Google Cloud Vision OCR
       const extractedMarks = await ocrService.processImage(selectedImage);
+
+      // Update processing status and progress
+      setProcessingStatus("تم استخراج البيانات بنجاح!");
+      setProcessingProgress(100);
 
       // Show preview of extracted data
       setExtractedData(extractedMarks);
       completeStep(AppStep.ImageProcessing);
-      advanceToStep(AppStep.ReviewConfirm);
+
+      // Small delay to show the completed status before moving to next step
+      setTimeout(() => {
+        advanceToStep(AppStep.ReviewConfirm);
+        setIsProcessing(false);
+      }, 1000);
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message || "حدث خطأ أثناء معالجة الصورة. الرجاء المحاولة مرة أخرى.");
@@ -220,7 +260,6 @@ const App: React.FC<AppProps> = ({ title, isOfficeInitialized = true }) => {
         setError("حدث خطأ غير معروف أثناء معالجة الصورة");
       }
       console.error(err);
-    } finally {
       setIsProcessing(false);
     }
   };
@@ -228,24 +267,33 @@ const App: React.FC<AppProps> = ({ title, isOfficeInitialized = true }) => {
   // Handle mark data confirmation
   const handleConfirmData = async () => {
     try {
+      // Set processing
+      setIsSaving(true);
+      setProcessingStatus("جاري التحقق من ملف Excel...");
+
       // First validate Excel file
       const isValidFile = await excelService.validateExcelFile();
       if (!isValidFile) {
         setError("يرجى التأكد من فتح ملف مسار صحيح في Excel");
+        setIsSaving(false);
         return;
       }
 
       // Show mark type selection dialog
+      setIsSaving(false);
       setShowMarkTypeDialog(true);
     } catch (err) {
       setError("حدث خطأ أثناء التحقق من ملف Excel");
       console.error(err);
+      setIsSaving(false);
     }
   };
 
   // Handle mark type selection
   const handleMarkTypeSelected = async (markType: string) => {
     setIsSaving(true);
+    setProcessingStatus("جاري إدخال النقط في ملف Excel...");
+
     try {
       if (!extractedData) {
         throw new Error("No data to save");
@@ -258,16 +306,21 @@ const App: React.FC<AppProps> = ({ title, isOfficeInitialized = true }) => {
         setError(`تم إدخال ${results.success} علامة بنجاح. ${results.notFound} طالب لم يتم العثور عليهم.`);
       } else {
         setError(null);
+        // Show success status alert
+        setProcessingStatus("تم إدخال النقط بنجاح!");
       }
 
       // Close dialogs and reset state
-      setShowMarkTypeDialog(false);
-      resetApp();
+      setTimeout(() => {
+        setShowMarkTypeDialog(false);
+        resetApp();
+        setIsSaving(false);
+      }, 1500);
     } catch (err) {
       setError("حدث خطأ أثناء إدخال البيانات في Excel");
       console.error(err);
-    } finally {
       setIsSaving(false);
+      setShowMarkTypeDialog(false);
     }
   };
 
@@ -299,6 +352,8 @@ const App: React.FC<AppProps> = ({ title, isOfficeInitialized = true }) => {
     setExtractedData(null);
     setCurrentStep(AppStep.ImageProcessing);
     setCompletedSteps(new Set());
+    setProcessingStatus("جاري المعالجة...");
+    setProcessingProgress(0);
   };
 
   return (
@@ -329,6 +384,8 @@ const App: React.FC<AppProps> = ({ title, isOfficeInitialized = true }) => {
             selectedImage={selectedImage}
             imagePreview={imagePreview}
             isProcessing={isProcessing}
+            processingStatus={processingStatus}
+            processingProgress={processingProgress}
             onImageUpload={handleImageUpload}
             onProcessImage={processImage}
             fileInputRef={fileInputRef}
@@ -350,6 +407,8 @@ const App: React.FC<AppProps> = ({ title, isOfficeInitialized = true }) => {
               onConfirm={handleConfirmData}
               onCancel={resetApp}
               onDataUpdate={handleDataUpdate}
+              isSaving={isSaving}
+              processingStatus={processingStatus}
             />
           )}
         </div>

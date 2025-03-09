@@ -47,6 +47,7 @@ export interface ExcelStatus {
 export interface WorksheetStructure {
   headers: string[];
   studentNameColumn: number;
+  studentNumberColumn: number; // Added for better student identification
   totalRows: number;
   markColumns: Record<MarkType, number>;
 }
